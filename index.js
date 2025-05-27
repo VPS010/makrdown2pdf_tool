@@ -1,3 +1,6 @@
+// Load environment variables
+require('dotenv').config();
+
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
@@ -6,6 +9,21 @@ const MarkdownIt = require('markdown-it');
 const PDFDocument = require('pdfkit');
 const PDFTable = require('pdfkit-table');
 const { Readable } = require('stream');
+const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+const { v4: uuidv4 } = require('uuid');
+
+// Configure AWS S3 client
+const s3Client = new S3Client({
+  region: process.env.AWS_REGION || 'us-east-1',
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+  }
+});
+
+// S3 bucket name
+const BUCKET_NAME = process.env.S3_BUCKET_NAME;
 
 // Initialize Express app
 const app = express();
@@ -144,8 +162,33 @@ app.post('/convert', (req, res) => {
           }
         });
         
-        // Send the PDF buffer in the response
-        res.send(pdfBuffer);
+        // Upload the PDF to S3
+        const fileName = `${uuidv4()}.pdf`;
+        
+        try {
+          // Upload to S3 with public-read ACL
+          await s3Client.send(new PutObjectCommand({
+            Bucket: BUCKET_NAME,
+            Key: fileName,
+            Body: pdfBuffer,
+            ContentType: 'application/pdf',
+            ACL: 'public-read' // Make the object publicly accessible
+          }));
+          
+          // Generate direct S3 URL (not pre-signed)
+          const publicUrl = `https://${BUCKET_NAME}.s3.amazonaws.com/${fileName}`;
+          
+          // Return the permanent download link
+          res.status(200).json({
+            success: true,
+            message: 'PDF generated and uploaded successfully',
+            downloadUrl: publicUrl,
+            permanent: true
+          });
+        } catch (uploadError) {
+          console.error('Error uploading to S3:', uploadError);
+          return res.status(500).json({ error: 'Failed to upload PDF to S3' });
+        }
       } catch (err) {
         console.error('Error converting markdown to PDF:', err);
         return res.status(500).json({ error: 'Failed to convert markdown to PDF' });
