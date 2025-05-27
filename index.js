@@ -3,7 +3,8 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 const morgan = require('morgan');
 const MarkdownIt = require('markdown-it');
-const puppeteer = require('puppeteer');
+const PDFDocument = require('pdfkit');
+const PDFTable = require('pdfkit-table');
 const { Readable } = require('stream');
 
 // Initialize Express app
@@ -57,37 +58,91 @@ app.post('/convert', (req, res) => {
     
     const htmlContent = md.render(markdownContent);
     
-    // Generate PDF from HTML using puppeteer
+    // Generate PDF using PDFKit
     (async () => {
       try {
-        // Launch a headless browser
-        const browser = await puppeteer.launch({
-          headless: 'new',
-          args: ['--no-sandbox', '--disable-setuid-sandbox']
+        // Set up the PDF document
+        const pdfBuffer = await new Promise((resolve, reject) => {
+          try {
+            // Create a PDF document
+            const doc = new PDFDocument({ margin: 50 });
+            const chunks = [];
+            
+            // Collect PDF data chunks
+            doc.on('data', chunk => chunks.push(chunk));
+            
+            // Resolve promise with the complete PDF buffer
+            doc.on('end', () => resolve(Buffer.concat(chunks)));
+            
+            // Handle errors
+            doc.on('error', err => reject(err));
+            
+            // Get only text content from markdown (removing HTML tags)
+            const plainText = htmlContent.replace(/<[^>]*>/g, '');
+            
+            // Add a title - we'll use the first line as a title if it starts with #
+            const lines = markdownContent.split('\n');
+            let title = 'Converted Document';
+            if (lines[0] && lines[0].startsWith('# ')) {
+              title = lines[0].substring(2);
+            }
+            
+            doc.fontSize(24);
+            doc.font('Helvetica-Bold');
+            doc.text(title, { align: 'center' });
+            doc.moveDown(1);
+            
+            // Add the markdown content
+            doc.fontSize(12);
+            doc.font('Helvetica');
+            
+            // Format document based on markdown content
+            const formattedContent = [];
+            let inBold = false;
+            let inItalic = false;
+            let inHeading = false;
+            
+            lines.forEach((line, index) => {
+              // Skip the first line if it's a title we've already handled
+              if (index === 0 && line.startsWith('# ')) return;
+              
+              // Handle headings
+              if (line.startsWith('## ')) {
+                doc.moveDown(0.5);
+                doc.fontSize(18).font('Helvetica-Bold').text(line.substring(3));
+                doc.fontSize(12).font('Helvetica');
+                doc.moveDown(0.5);
+              } else if (line.startsWith('### ')) {
+                doc.moveDown(0.5);
+                doc.fontSize(16).font('Helvetica-Bold').text(line.substring(4));
+                doc.fontSize(12).font('Helvetica');
+                doc.moveDown(0.5);
+              } else if (line.trim() === '') {
+                doc.moveDown(0.5);
+              } else {
+                // Process the line for bold and italic markers
+                let processedLine = line;
+                
+                // Replace bold markers
+                processedLine = processedLine.replace(/\*\*(.*?)\*\*/g, (match, content) => {
+                  return content;
+                });
+                
+                // Replace italic markers
+                processedLine = processedLine.replace(/\*(.*?)\*/g, (match, content) => {
+                  return content;
+                });
+                
+                doc.text(processedLine);
+              }
+            });
+            
+            // Finalize the PDF
+            doc.end();
+          } catch (err) {
+            reject(err);
+          }
         });
-        
-        // Create a new page
-        const page = await browser.newPage();
-        
-        // Set content to our HTML
-        await page.setContent(htmlContent, {
-          waitUntil: 'networkidle0'
-        });
-        
-        // Generate PDF
-        const pdfBuffer = await page.pdf({
-          format: 'A4',
-          margin: {
-            top: '50px',
-            right: '50px',
-            bottom: '50px',
-            left: '50px'
-          },
-          printBackground: true
-        });
-        
-        // Close the browser
-        await browser.close();
         
         // Send the PDF buffer in the response
         res.send(pdfBuffer);
