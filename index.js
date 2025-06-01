@@ -331,38 +331,70 @@ app.get('/', (req, res) => {
   }
 });
 
-// Start server
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
-// Set up OAuth2 client with credentials from client_secret.json
+// Function to set up OAuth2 client with credentials from client_secret.json
 function getOAuth2Client() {
   try {
-    const credentialsPath = path.join(__dirname, 'client_secret_961589008930-dnhdi9g1ltasmqiev8uf32vfrckalfa1.apps.googleusercontent.com.json');
-    const credentialsContent = fs.readFileSync(credentialsPath, 'utf8');
+    // Check for credentials in multiple locations
+    let credentialsPath;
+    let credentialsContent;
+    
+    // First check deployment environment secrets path
+    if (fs.existsSync('/etc/secrets/client_secret.json')) {
+      credentialsPath = '/etc/secrets/client_secret.json';
+      console.log('Using client secret from /etc/secrets/client_secret.json');
+    } 
+    // Then check for a generic client_secret.json in the app root
+    else if (fs.existsSync(path.join(__dirname, 'client_secret.json'))) {
+      credentialsPath = path.join(__dirname, 'client_secret.json');
+      console.log('Using client secret from client_secret.json');
+    }
+    // Finally use the specific client secret file
+    else {
+      credentialsPath = path.join(__dirname, 'client_secret_961589008930-dnhdi9g1ltasmqiev8uf32vfrckalfa1.apps.googleusercontent.com.json');
+      console.log('Using client secret from specific client_secret file');
+    }
+    
+    // Read and parse the credentials
+    credentialsContent = fs.readFileSync(credentialsPath, 'utf8');
     const credentials = JSON.parse(credentialsContent);
     
+    // Set up OAuth2 client
     const { client_id, client_secret, redirect_uris } = credentials.installed;
-    
     const oauth2Client = new google.auth.OAuth2(
       client_id,
       client_secret,
       redirect_uris[0]
     );
     
-    // Check for existing refresh token in environment variables
-    const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+    // Get refresh token from environment or secrets
+    let refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
     
-    if (!refreshToken) {
-      console.warn('Refresh token not found in environment variables');
-      // We'll throw an error when attempting to use the client
-    } else {
-      // Set refresh token for the client
+    // If not in process.env, check deployment secrets location
+    if (!refreshToken && fs.existsSync('/etc/secrets/.env')) {
+      try {
+        const envContent = fs.readFileSync('/etc/secrets/.env', 'utf8');
+        const refreshTokenMatch = envContent.match(/GOOGLE_REFRESH_TOKEN=(.+)/);
+        if (refreshTokenMatch && refreshTokenMatch[1]) {
+          refreshToken = refreshTokenMatch[1].trim();
+          console.log('Using refresh token from /etc/secrets/.env');
+        }
+      } catch (err) {
+        console.error('Error reading from /etc/secrets/.env:', err.message);
+      }
+    }
+    
+    // Set up refresh token if available
+    if (refreshToken) {
       oauth2Client.setCredentials({
         refresh_token: refreshToken
       });
       console.log('OAuth2 client configured with refresh token');
+    } else {
+      console.log('Refresh token not found in environment variables or secrets');
     }
     
     return oauth2Client;
