@@ -9,6 +9,7 @@ const { Readable } = require('stream');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const { google } = require('googleapis');
 require('dotenv').config();
 
 // Initialize Express app
@@ -189,7 +190,7 @@ app.post('/convert', (req, res) => {
           res.json({
             downloadUrl: localDownloadUrl,
             source: 'local_storage',
-            message: 'PDF stored locally due to Google Drive authentication issue. To use Google Drive, please update your access token.'
+            message: 'PDF stored locally due to Google Drive authentication issue. Please visit /auth/google to set up Google Drive authentication.'
           });
         }
       } catch (err) {
@@ -204,172 +205,277 @@ app.post('/convert', (req, res) => {
   }
 });
 
-// Simple health check endpoint
-app.get('/', (req, res) => {
-  res.status(200).json({ status: 'server is up' });
+// Route to get OAuth2 authorization URL
+app.get('/auth/google', (req, res) => {
+  try {
+    const authUrl = getAuthUrl();
+    res.json({ authUrl });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-// Token verification endpoint
-app.get('/verify-token', async (req, res) => {
+// Route to handle OAuth2 callback
+app.get('/auth/google/callback', async (req, res) => {
   try {
-    const accessToken = process.env.GOOGLE_ACCESS_TOKEN;
+    const { code } = req.query;
     
-    if (!accessToken) {
-      return res.status(400).json({
-        valid: false,
-        message: 'No Google Drive access token found in environment variables',
-        instructions: 'Add GOOGLE_ACCESS_TOKEN to your .env file'
-      });
+    if (!code) {
+      return res.status(400).send('Authorization code is required');
     }
     
-    // Make a simple API call to check if the token is valid
-    try {
-      await axios.get('https://www.googleapis.com/drive/v3/about?fields=user', {
-        headers: {
-          Authorization: `Bearer ${accessToken}`
-        }
-      });
-      
-      return res.status(200).json({
-        valid: true,
-        message: 'Google Drive access token is valid'
-      });
-    } catch (error) {
-      // Token is invalid or expired
+    const oauth2Client = getOAuth2Client();
+    
+    // Exchange the authorization code for tokens
+    const { tokens } = await oauth2Client.getToken(code);
+    
+    // Extract refresh token
+    const refreshToken = tokens.refresh_token;
+    
+    if (!refreshToken) {
+      return res.status(400).send('No refresh token was received. Please try again and make sure to approve access.');
+    }
+    
+    res.send(`
+      <h1>Authorization Successful</h1>
+      <p>Your refresh token has been generated. Add this to your .env file:</p>
+      <pre>GOOGLE_REFRESH_TOKEN=${refreshToken}</pre>
+      <p><strong>Important:</strong> Keep this token secure and do not share it!</p>
+    `);
+  } catch (error) {
+    console.error('Error in OAuth callback:', error.message);
+    res.status(500).send(`Error: ${error.message}`);
+  }
+});
+
+// Route to check Google Drive authentication status
+app.get('/auth/status', async (req, res) => {
+  try {
+    // Check if we have a refresh token
+    const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+    
+    if (refreshToken) {
+      try {
+        // Try to use the oauth client with refresh token
+        const oauth2Client = getOAuth2Client();
+        const drive = google.drive({ version: 'v3', auth: oauth2Client });
+        
+        // Make a simple API call to verify the token works
+        await drive.about.get({ fields: 'user' });
+        
+        return res.status(200).json({
+          valid: true,
+          message: 'Google Drive refresh token is valid'
+        });
+      } catch (error) {
+        console.error('Error validating refresh token:', error.message);
+        return res.status(200).json({
+          valid: false,
+          message: 'Google Drive refresh token is invalid',
+          error: error.message,
+          authUrl: getAuthUrl()
+        });
+      }
+    } else {
       return res.status(200).json({
         valid: false,
-        message: 'Google Drive access token is invalid or expired',
-        instructions: 'To get a new access token:\n' +
-          '1. Go to https://developers.google.com/oauthplayground/\n' +
-          '2. Select Drive API v3 under "Drive API v3"\n' +
-          '3. Click "Authorize APIs" and follow the OAuth flow\n' +
-          '4. Click "Exchange authorization code for tokens"\n' +
-          '5. Copy the access token and update your .env file'
+        message: 'No Google Drive refresh token found',
+        authUrl: getAuthUrl()
       });
     }
   } catch (error) {
-    console.error('Error in token verification:', error);
     return res.status(500).json({
-      valid: false,
-      message: 'Error while verifying token',
-      error: error.message
+      error: 'Error checking authentication status',
+      details: error.message
     });
   }
 });
+
+// Root route - handles both health check and OAuth callback
+app.get('/', (req, res) => {
+  // Check if this is an OAuth callback (has code parameter)
+  const code = req.query.code;
+  
+  if (code) {
+    // This is an OAuth callback
+    const oauth2Client = getOAuth2Client();
+    
+    // Exchange the authorization code for tokens
+    oauth2Client.getToken(code)
+      .then(({tokens}) => {
+        // Extract refresh token
+        const refreshToken = tokens.refresh_token;
+        
+        if (!refreshToken) {
+          return res.status(400).send(`
+            <h1>No Refresh Token Received</h1>
+            <p>This can happen if you've previously authorized this application.</p>
+            <p>Try revoking access in your Google Account and trying again.</p>
+          `);
+        }
+        
+        res.send(`
+          <h1>Authorization Successful!</h1>
+          <p>Your refresh token has been generated. Add this to your .env file:</p>
+          <pre>GOOGLE_REFRESH_TOKEN=${refreshToken}</pre>
+          <p><strong>Important:</strong> Keep this token secure and do not share it!</p>
+        `);
+      })
+      .catch(error => {
+        console.error('Error in OAuth callback:', error.message);
+        res.status(500).send(`Error: ${error.message}`);
+      });
+  } else {
+    // Regular health check
+    res.status(200).json({ status: 'server is up' });
+  }
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
+// Set up OAuth2 client with credentials from client_secret.json
+function getOAuth2Client() {
+  try {
+    const credentialsPath = path.join(__dirname, 'client_secret_961589008930-dnhdi9g1ltasmqiev8uf32vfrckalfa1.apps.googleusercontent.com.json');
+    const credentialsContent = fs.readFileSync(credentialsPath, 'utf8');
+    const credentials = JSON.parse(credentialsContent);
+    
+    const { client_id, client_secret, redirect_uris } = credentials.installed;
+    
+    const oauth2Client = new google.auth.OAuth2(
+      client_id,
+      client_secret,
+      redirect_uris[0]
+    );
+    
+    // Check for existing refresh token in environment variables
+    const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+    
+    if (!refreshToken) {
+      console.warn('Refresh token not found in environment variables');
+      // We'll throw an error when attempting to use the client
+    } else {
+      // Set refresh token for the client
+      oauth2Client.setCredentials({
+        refresh_token: refreshToken
+      });
+      console.log('OAuth2 client configured with refresh token');
+    }
+    
+    return oauth2Client;
+  } catch (error) {
+    console.error('Error setting up OAuth2 client:', error.message);
+    throw new Error(`Failed to initialize OAuth2 client: ${error.message}`);
+  }
+}
+
+// Function to check if refresh token is available
+function hasRefreshToken() {
+  return !!process.env.GOOGLE_REFRESH_TOKEN;
+}
+
+// Function to generate auth URL for obtaining refresh token
+function getAuthUrl() {
+  try {
+    const oauth2Client = getOAuth2Client();
+    
+    const scopes = [
+      'https://www.googleapis.com/auth/drive.file',
+      'https://www.googleapis.com/auth/drive.metadata.readonly'
+    ];
+    
+    const authUrl = oauth2Client.generateAuthUrl({
+      access_type: 'offline',
+      scope: scopes,
+      prompt: 'consent'  // Forces to get refresh token every time
+    });
+    
+    return authUrl;
+  } catch (error) {
+    console.error('Error generating auth URL:', error.message);
+    throw error;
+  }
+}
 
 // Function to upload the PDF to Google Drive
 async function uploadToGoogleDrive(pdfBuffer, title) {
   try {
     console.log('Starting Google Drive upload process...');
-    const accessToken = process.env.GOOGLE_ACCESS_TOKEN;
     const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
-    
-    if (!accessToken) {
-      throw new Error('Google Drive access token not found in environment variables');
-    }
     
     // Generate a filename with timestamp to avoid duplicates
     const fileName = `${title.replace(/[^a-z0-9]/gi, '_')}_${Date.now()}.pdf`;
     console.log(`Creating file: ${fileName}`);
     
-    // Create metadata for the file
-    const metadata = {
+    // Check if refresh token is available
+    if (!hasRefreshToken()) {
+      throw new Error('Google Drive refresh token not found in environment variables. Please visit /auth/google to set up authentication.');
+    }
+    
+    // Get the OAuth2 client with refresh token
+    const oauth2Client = getOAuth2Client();
+    
+    // Create Drive client using OAuth2 client
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+    
+    // Create file metadata
+    const fileMetadata = {
       name: fileName,
       mimeType: 'application/pdf'
     };
     
     // If a folder ID is provided, add it to the metadata
     if (folderId) {
-      metadata.parents = [folderId];
+      fileMetadata.parents = [folderId];
       console.log(`Using folder ID: ${folderId}`);
     } else {
       console.log('No folder ID provided, uploading to root');
     }
     
-    // Use a simpler multipart upload approach
-    console.log('Preparing file upload...');
-    
-    // Create a boundary for the multipart request
-    const boundary = '-------314159265358979323846';
-    
-    // Create the multipart request body
-    const metadataPart = Buffer.from(
-      '--' + boundary + '\r\n' +
-      'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-      JSON.stringify(metadata) + '\r\n'
-    );
-    
-    const contentPart = Buffer.from(
-      '--' + boundary + '\r\n' +
-      'Content-Type: application/pdf\r\n\r\n'
-    );
-    
-    const closeDelimiter = Buffer.from('\r\n--' + boundary + '--', 'utf8');
-    
-    // Combine all parts
-    const multipartRequestBody = Buffer.concat([
-      metadataPart,
-      contentPart,
-      pdfBuffer,
-      closeDelimiter
-    ]);
+    // Create media metadata
+    const media = {
+      mimeType: 'application/pdf',
+      body: Readable.from(pdfBuffer)
+    };
     
     console.log('Uploading file to Google Drive...');
     
-    // Upload file with multipart request
-    const uploadResponse = await axios.post(
-      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
-      multipartRequestBody,
-      {
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': `multipart/related; boundary=${boundary}`,
-          'Content-Length': multipartRequestBody.length
-        },
-        maxBodyLength: Infinity,
-        maxContentLength: Infinity
-      }
-    );
+    // Upload the file
+    const uploadResponse = await drive.files.create({
+      resource: fileMetadata,
+      media: media,
+      fields: 'id'
+    });
     
     const fileId = uploadResponse.data.id;
     console.log(`File uploaded successfully. File ID: ${fileId}`);
     
+    // Set permissions to make the file publicly accessible
     try {
       console.log(`Setting public permissions for file ID: ${fileId}`);
-      // Update permissions to make the file accessible with the link
-      await axios.post(
-        `https://www.googleapis.com/drive/v3/files/${fileId}/permissions`,
-        {
+      await drive.permissions.create({
+        fileId: fileId,
+        requestBody: {
           role: 'reader',
           type: 'anyone'
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-          }
         }
-      );
+      });
       console.log('Permissions updated successfully');
     } catch (permissionError) {
       console.error('Error setting permissions:', permissionError.message);
-      if (permissionError.response) {
-        console.error('Permission response data:', permissionError.response.data);
-      }
       // Continue anyway, we might still be able to get a download link
     }
     
     try {
       console.log(`Retrieving download link for file ID: ${fileId}`);
-      // Get both webViewLink (for viewing in browser) and webContentLink (for direct download)
-      const fileResponse = await axios.get(
-        `https://www.googleapis.com/drive/v3/files/${fileId}?fields=webViewLink,webContentLink,id,name`,
-        {
-          headers: {
-            Authorization: `Bearer ${accessToken}`
-          }
-        }
-      );
+      // Get file metadata including webContentLink and webViewLink
+      const fileResponse = await drive.files.get({
+        fileId: fileId,
+        fields: 'webViewLink,webContentLink,id,name'
+      });
       
       console.log('File metadata retrieved:', fileResponse.data);
       
@@ -384,9 +490,6 @@ async function uploadToGoogleDrive(pdfBuffer, title) {
       return downloadLink;
     } catch (linkError) {
       console.error('Error retrieving file links:', linkError.message);
-      if (linkError.response) {
-        console.error('Link retrieval response data:', linkError.response.data);
-      }
       
       // As a fallback, construct a direct download link
       const fallbackLink = `https://drive.google.com/uc?export=download&id=${fileId}`;
@@ -395,22 +498,6 @@ async function uploadToGoogleDrive(pdfBuffer, title) {
     }
   } catch (error) {
     console.error('Error uploading to Google Drive:', error.message);
-    if (error.response) {
-      console.error('Response data:', error.response.data);
-      
-      // Check for specific authentication errors
-      if (error.response.status === 401) {
-        // Don't throw here, just return the error to allow fallback
-    return Promise.reject(new Error('Google Drive access token is expired or invalid. Please update your GOOGLE_ACCESS_TOKEN in the .env file.'));
-      } else if (error.response.data && error.response.data.error) {
-        throw new Error(`Google Drive API error: ${error.response.data.error.message || 'Unknown API error'}`);
-      }
-    }
-    throw new Error('Failed to upload PDF to Google Drive');
+    throw error;
   }
 }
-
-// Start server
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
