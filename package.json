@@ -17,16 +17,17 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.821.0",
+    "@aws-sdk/s3-request-presigner": "^3.821.0",
+    "axios": "^1.9.0",
     "body-parser": "^1.20.2",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "markdown-it": "^13.0.1",
+    "morgan": "^1.10.0",
     "pdfkit": "^0.13.0",
     "pdfkit-table": "^0.1.99",
-    "morgan": "^1.10.0",
-    "@aws-sdk/client-s3": "^3.350.0",
-    "@aws-sdk/s3-request-presigner": "^3.350.0",
     "uuid": "^9.0.0"
   },
   "devDependencies": {

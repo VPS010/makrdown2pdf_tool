@@ -164,19 +164,20 @@ app.post('/convert', (req, res) => {
         
         // Upload the PDF to S3
         const fileName = `${uuidv4()}.pdf`;
-        
+
         try {
-          // Upload to S3 with public-read ACL
+          // Upload to S3
           await s3Client.send(new PutObjectCommand({
             Bucket: BUCKET_NAME,
             Key: fileName,
             Body: pdfBuffer,
             ContentType: 'application/pdf',
-            ACL: 'public-read' // Make the object publicly accessible
+            // ACL is not supported in some regions like eu-west-1, so we'll generate a public URL instead
           }));
           
-          // Generate direct S3 URL (not pre-signed)
-          const publicUrl = `https://${BUCKET_NAME}.s3.amazonaws.com/${fileName}`;
+          // Generate direct S3 URL
+          const bucketRegion = process.env.AWS_REGION || 'us-east-1';
+          const publicUrl = `https://${BUCKET_NAME}.s3.${bucketRegion}.amazonaws.com/${fileName}`;
           
           // Return the permanent download link
           res.status(200).json({
