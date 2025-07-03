@@ -77,13 +77,13 @@ class ProfessionalPDFTemplate {
       .fill();
 
     // Logo image (centered in white circle)
-    const logoPath = path.join(__dirname, 'MatCare_Werkt_loopbaan-2-150x180.png');
+    const logoPath = path.join(__dirname, 'schermafbeelding_2025-06-18_105003.png');
     // The logo in the template is centered horizontally, and slightly above the text, inside the white circle.
     // The logo image is about 75px wide and 90px tall in the template (approximate, scale as needed)
-    const logoWidth = 98;
+    const logoWidth = 117;
     const logoHeight = 117;
     const logoX = centerX - logoWidth / 2;
-    const logoY = centerY - 120 - logoHeight / 2 - 20; // -10 moves it further up
+    const logoY = centerY - 120 - logoHeight / 2 - 30; // -10 moves it further up
     try {
       doc.image(logoPath, logoX, logoY, { width: logoWidth, height: logoHeight });
     } catch (e) {
