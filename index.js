@@ -213,12 +213,15 @@ class ProfessionalPDFTemplate {
     
     // Draw circular background for page number (matching template)
     const circleRadius = 12;
-    doc.fill(this.colors.blue)
-      .circle(pageNumX, pageNumY, circleRadius)
-      .fill();
+    // Draw quarter-arc (bottom-right) instead of full circle
+    doc.lineWidth(4)
+       .strokeColor(this.colors.blue)
+       .lineCap('round')
+       .arc(pageNumX, pageNumY, circleRadius, 315, 45, false)
+       .stroke();
     
-    // Page number text (white on blue circle)
-    doc.fill(this.colors.white)
+    // Page number text (dark on white background)
+    doc.fill(this.colors.dark)
       .font(this.fonts.bold)
       .fontSize(12);
     
@@ -404,8 +407,13 @@ class ProfessionalPDFTemplate {
     const pageNum = doc.bufferedPageRange().count - 1;
     const pageNumX = pageWidth - 50;
     const pageNumY = pageHeight - 30;
-    doc.fill(this.colors.blue).circle(pageNumX, pageNumY, 12).fill();
-    doc.fill(this.colors.white).font(this.fonts.bold).fontSize(12);
+    // Quarter-arc graphic around page number
+    doc.lineWidth(4)
+       .strokeColor(this.colors.blue)
+       .lineCap('round')
+       .arc(pageNumX, pageNumY, 12, 315, 45, false)
+       .stroke();
+    doc.fill(this.colors.dark).font(this.fonts.bold).fontSize(12);
     const w = doc.widthOfString(String(pageNum));
     doc.text(String(pageNum), pageNumX - w / 2, pageNumY - 6);
   }
